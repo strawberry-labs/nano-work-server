@@ -92,6 +92,7 @@ impl WorkState {
 #[derive(Clone)]
 struct RpcService {
     work_state: Arc<(Mutex<WorkState>, Condvar)>,
+    expected_api_key: Option<String>,
 }
 
 enum RpcCommand {
@@ -475,6 +476,30 @@ impl RpcService {
     }
 
     async fn handle_request(self, mut req: Request<Body>) -> hyper::Result<Response<Body>> {
+        if let Some(ref expected_api_key) = self.expected_api_key {
+            let authorized = match req.headers().get("api-key") {
+                Some(key) => match key.to_str() {
+                    Ok(k) => k == expected_api_key,
+                    Err(_) => false,
+                },
+                None => false,
+            };
+
+            if !authorized {
+                let body = json!({
+                    "error": "Unauthorized",
+                    "hint": "Invalid or missing API key."
+                })
+                .to_string();
+                return Ok(Response::builder()
+                    .status(StatusCode::UNAUTHORIZED)
+                    .header(hyper::header::CONTENT_TYPE, "application/json")
+                    .header(hyper::header::CONTENT_LENGTH, body.len())
+                    .body(Body::from(body))
+                    .expect("Failed to build response"));
+            }
+        }
+
         let (status, body) = if *req.method() == hyper::Method::POST {
             let self_copy = self.clone();
             let body = hyper::body::to_bytes(req.body_mut()).await?;
@@ -540,6 +565,12 @@ async fn main() {
                 .long("shuffle")
                 .help("Pick a random request from the queue instead of the oldest. Increases efficiency when using multiple work servers")
         )
+        .arg(
+            clap::Arg::with_name("api_key")
+                .long("api-key")
+                .value_name("KEY")
+                .help("Specifies the API key for authenticating requests (optional)."),
+        )
         .get_matches();
     let random_mode = args.is_present("shuffle");
     let listen_addr = args
@@ -591,6 +622,9 @@ async fn main() {
         eprintln!("No workers specified. Please use the --gpu or --cpu-threads flags.\nUse --help for more options.");
         process::exit(1);
     }
+
+    let api_key = args.value_of("api_key").map(String::from);
+
     let work_state = Arc::new((Mutex::new(WorkState::default()), Condvar::new()));
     {
         let mut state = work_state.0.lock();
@@ -742,6 +776,7 @@ async fn main() {
 
     let service = RpcService {
         work_state: work_state.clone(),
+        expected_api_key: api_key,
     };
     let make_service = hyper::service::make_service_fn(|_| {
         let service = service.clone();
