@@ -507,7 +507,7 @@ impl RpcService {
             match serde_json::from_slice::<Value>(&body_bytes) {
                 Ok(json) => {
                     match self_copy.parse_json(json) {
-                        Ok(command) => {
+                        Ok(_command) => {
                             self_copy.process_req(&body_bytes).await?
                         }
                         Err(err_json) => {
@@ -538,14 +538,14 @@ impl RpcService {
             )
         };
 
-        let body_str = body.to_string();
+        let body_str = body_json.to_string();
         let body_len = body_str.len();
-        let body = Body::from(body_str);
+        let response_body = Body::from(body_str);
         Ok(Response::builder()
             .header(hyper::header::CONTENT_LENGTH, body_len)
             .header(hyper::header::CONTENT_TYPE, "application/json")
             .status(status)
-            .body(body)
+            .body(response_body)
             .expect("Failed to build response"))
     }
 }
