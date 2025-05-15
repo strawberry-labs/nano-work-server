@@ -500,18 +500,44 @@ impl RpcService {
             }
         }
 
-        let (status, body) = if *req.method() == hyper::Method::POST {
+        let (status, body_json) = if *req.method() == hyper::Method::POST {
             let self_copy = self.clone();
-            let body = hyper::body::to_bytes(req.body_mut()).await?;
-            self_copy.process_req(body.as_ref()).await?
+            let body_bytes = hyper::body::to_bytes(req.body_mut()).await?;
+
+            match serde_json::from_slice::<Value>(&body_bytes) {
+                Ok(json) => {
+                    match self_copy.parse_json(json) {
+                        Ok(command) => {
+                            self_copy.process_req(&body_bytes).await?
+                        }
+                        Err(err_json) => {
+                            eprintln!(
+                                "[BadRequest] Failed to parse JSON command. Body: {}\nError: {}",
+                                String::from_utf8_lossy(&body_bytes),
+                                err_json
+                            );
+                            (StatusCode::BAD_REQUEST, err_json)
+                        }
+                    }
+                }
+                Err(_) => {
+                    eprintln!(
+                        "[BadRequest] Failed to deserialize JSON body: {}",
+                        String::from_utf8_lossy(&body_bytes)
+                    );
+                    (
+                        StatusCode::BAD_REQUEST,
+                        json!({ "error": "Failed to deserialize JSON" }),
+                    )
+                }
+            }
         } else {
             (
                 StatusCode::METHOD_NOT_ALLOWED,
-                json!({
-                    "error": "Can only POST requests",
-                }),
+                json!({ "error": "Can only POST requests" }),
             )
         };
+
         let body_str = body.to_string();
         let body_len = body_str.len();
         let body = Body::from(body_str);
